@@ -34,7 +34,8 @@ public class ForgeInstaller {
         InstallInfo installInfo = new Gson().fromJson(new InputStreamReader(stream), InstallInfo.class);
         List<Supplier<Path>> suppliers = MinecraftProvider.checkMavenNoSource(installInfo.libraries);
         Path path = Paths.get("forge-" + installInfo.installer.minecraft + "-" + installInfo.installer.forge + "-shim.jar");
-        var installForge = !Files.exists(path) || forgeClasspathMissing(path);
+        //TODO Do not install forge again
+        /*var installForge = !Files.exists(path) || forgeClasspathMissing(path);
         if (!suppliers.isEmpty() || installForge) {
             System.out.println("Downloading missing libraries ...");
             ExecutorService pool = Executors.newWorkStealingPool(8);
@@ -63,7 +64,7 @@ public class ForgeInstaller {
             }
             MinecraftProvider.handleFutures(System.out::println, array);
             pool.shutdownNow();
-        }
+        }*/
         return classpath(path, installInfo);
     }
 

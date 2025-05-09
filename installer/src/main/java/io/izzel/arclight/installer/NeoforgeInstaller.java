@@ -40,7 +40,8 @@ public class NeoforgeInstaller {
         List<Supplier<Path>> suppliers = MinecraftProvider.checkMavenNoSource(installInfo.libraries);
         var sysType = File.pathSeparatorChar == ';' ? "win" : "unix";
         Path path = Paths.get("libraries", "net", "neoforged", "neoforge", installInfo.installer.neoforge, sysType + "_args.txt");
-        var installForge = !Files.exists(path) || forgeClasspathMissing(path);
+        //TODO Do not install forge again
+        /*var installForge = !Files.exists(path) || forgeClasspathMissing(path);
         if (!suppliers.isEmpty() || installForge) {
             System.out.println("Downloading missing libraries ...");
             ExecutorService pool = Executors.newWorkStealingPool(8);
@@ -69,7 +70,7 @@ public class NeoforgeInstaller {
             }
             MinecraftProvider.handleFutures(System.out::println, array);
             pool.shutdownNow();
-        }
+        }*/
         return classpath(path, installInfo);
     }
 
