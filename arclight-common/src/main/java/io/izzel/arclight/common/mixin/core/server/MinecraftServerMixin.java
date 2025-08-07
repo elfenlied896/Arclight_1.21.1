@@ -10,6 +10,8 @@ import io.izzel.arclight.common.mod.ArclightConstants;
 import io.izzel.arclight.common.mod.mixins.annotation.TransformAccess;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.mod.server.BukkitRegistry;
+import io.izzel.arclight.common.mod.server.world.border.ArclightBorderChangeListener;
+import io.izzel.arclight.common.mod.server.world.border.ArclightDelegatedBorderListener;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.BukkitOptionParser;
 import io.izzel.arclight.mixin.Decorate;
@@ -51,6 +53,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.ForcedChunksSavedData;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.border.BorderChangeListener;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
@@ -77,6 +80,7 @@ import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
@@ -151,6 +155,8 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     @Shadow private float smoothedTickTimeMillis;
     @Shadow public abstract Iterable<ServerLevel> getAllLevels();
     // @formatter:on
+
+    @Shadow private PlayerList playerList;
 
     public MinecraftServerMixin(String name) {
         super(name);
@@ -290,19 +296,29 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
         BukkitRegistry.registerEnvironments(this.registryAccess().registryOrThrow(Registries.LEVEL_STEM));
     }
 
+    @Decorate(method = "createLevels", at = @At(value = "NEW", target = "(Lnet/minecraft/world/level/border/WorldBorder;)Lnet/minecraft/world/level/border/BorderChangeListener$DelegateBorderChangeListener;"))
+    private BorderChangeListener.DelegateBorderChangeListener arclight$configurableDelegatedListener(WorldBorder arg) throws Throwable {
+        // Arclight: move world border listener initialization to world registration
+        return new ArclightDelegatedBorderListener(arg, (BorderChangeListener.DelegateBorderChangeListener) DecorationOps.callsite().invoke(arg));
+    }
+
     @Decorate(method = "createLevels", at = @At(value = "INVOKE", remap = false, target = "Ljava/util/Map;put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))
     private Object arclight$worldInit(Map<Object, Object> instance, Object k, Object v, ChunkProgressListener chunkProgressListener) throws Throwable {
-        var serverWorld = (ServerLevel) v;
-        if (serverWorld != null) {
+        if (v instanceof ServerLevel level) {
             if (((CraftServer) Bukkit.getServer()).scoreboardManager == null) {
-                ((CraftServer) Bukkit.getServer()).scoreboardManager = new CraftScoreboardManager((MinecraftServer) (Object) this, serverWorld.getScoreboard());
+                ((CraftServer) Bukkit.getServer()).scoreboardManager = new CraftScoreboardManager((MinecraftServer) (Object) this, level.getScoreboard());
             }
-            if (((WorldBridge) serverWorld).bridge$getGenerator() != null) {
-                serverWorld.bridge$getWorld().getPopulators().addAll(
-                    ((WorldBridge) serverWorld).bridge$getGenerator().getDefaultPopulators(
-                        serverWorld.bridge$getWorld()));
+            if (((WorldBridge) level).bridge$getGenerator() != null) {
+                level.bridge$getWorld().getPopulators().addAll(
+                    ((WorldBridge) level).bridge$getGenerator().getDefaultPopulators(
+                        level.bridge$getWorld()));
             }
-            Bukkit.getPluginManager().callEvent(new WorldInitEvent(serverWorld.bridge$getWorld()));
+            Bukkit.getPluginManager().callEvent(new WorldInitEvent(level.bridge$getWorld()));
+
+            // Arclight: move world border listener initialization to world registration
+            // Arclight: ArclightBorderChangeListener is singleton so won't be added more than once
+            // Arclight: since it seems that we can't apply multiple Decorators to a target on Forge...
+            level.getWorldBorder().addListener(ArclightBorderChangeListener.typed());
         }
         return DecorationOps.callsite().invoke(instance, k, v);
     }
@@ -365,6 +381,19 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
         }
         WorldBorder worldborder = serverWorld.getWorldBorder();
         worldborder.applySettings(worldInfo.getWorldBorder());
+
+        // Arclight: move world border listener initialization to world registration
+        playerList.addWorldborderListener(serverWorld);
+
+        // Call WorldInitEvent for Bukkit created world
+        // Before any chunk is loaded/generated.
+        // This makes delayed configurate possible.
+        // Calling multiple times is OK since Spigot also do so.
+        // See [PlotSquared] BukkitSetupUtils#setupWorld(PlotAreaBuilder).
+        // See CraftServer.
+        // CraftBukkit - SPIGOT-5569: Call WorldInitEvent before any chunks are generated
+        this.server.getPluginManager().callEvent(new WorldInitEvent(serverWorld.bridge$getWorld()));
+
         if (!worldInfo.isInitialized()) {
             try {
                 setInitialSpawn(serverWorld, worldInfo, worldOptions.generateBonusChest(), flag);
@@ -483,6 +512,15 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     @Override
     public void bridge$setServer(CraftServer server) {
         this.server = server;
+    }
+
+    // Used for one-shot cache access
+    @Override
+    public CraftServer bridge$getServer() {
+        if (this.server == null) {
+            throw new IllegalStateException("CraftServer has not been initialized yet");
+        }
+        return this.server;
     }
 
     @Override
